@@ -106,6 +106,10 @@ def _ask_field(fld: Field, current: object) -> object:
         default_str = ", ".join(current) if isinstance(current, list) else str(current)
         raw = ask_text(fld.label, default_str, fld.help)
         return wizard.parse_admins(raw)
+    if fld.kind == "args":
+        default_str = wizard.format_args(current) if isinstance(current, list) else str(current)
+        raw = ask_text(fld.label, default_str, fld.help)
+        return wizard.parse_args(raw)
     if fld.kind == "secret":
         return ask_text(fld.label, str(current), fld.help, secret=True)
     return ask_text(fld.label, str(current), fld.help)
@@ -213,13 +217,10 @@ def _configure_services(state: WizardState) -> None:
             f"Enable {spec.label}", state.service_enabled.get(spec.key, True)
         )
         state.service_enabled[spec.key] = enabled
-        if enabled and spec.has_token:
-            state.service_token[spec.key] = ask_text(
-                f"{spec.label} token",
-                state.service_token.get(spec.key, ""),
-                spec.token_help,
-                secret=True,
-            )
+        if enabled and spec.fields:
+            values = state.service_config.setdefault(spec.key, {})
+            for fld in spec.fields:
+                values[fld.key] = _ask_field(fld, values.get(fld.key, fld.default))
 
     enabled_services = [s.key for s in SERVICES if state.service_enabled.get(s.key)]
     if enabled_services:

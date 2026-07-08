@@ -322,30 +322,45 @@ class WizardFrame(wx.Frame):
         page.SetSizer(sizer)
         return page
 
+    def _make_service_control(self, parent: wx.Window, box: wx.Sizer, fld: Field, value) -> wx.Window:
+        if fld.kind == "list" and isinstance(value, list):
+            text = ", ".join(value)
+        elif fld.kind == "args" and isinstance(value, list):
+            text = wizard.format_args(value)
+        else:
+            text = str(value)
+        style = wx.TE_PASSWORD if fld.kind == "secret" else 0
+        ctrl = wx.TextCtrl(parent, value=text, style=style)
+        _add_labeled(parent, box, f"{fld.label}:", ctrl, fld.help)
+        return ctrl
+
     def _build_services_page(self) -> wx.Window:
         page = wx.Panel(self.notebook)
         sizer = wx.BoxSizer(wx.VERTICAL)
         self.svc_enable: Dict[str, wx.CheckBox] = {}
-        self.svc_token: Dict[str, wx.TextCtrl] = {}
+        self.svc_fields: Dict[str, Dict[str, wx.Window]] = {}
 
         for spec in SERVICES:
             box = wx.StaticBoxSizer(wx.VERTICAL, page, spec.label)
-            enable = wx.CheckBox(box.GetStaticBox(), label=f"Enable {spec.label}")
+            parent = box.GetStaticBox()
+            enable = wx.CheckBox(parent, label=f"Enable {spec.label}")
             enable.SetValue(self._state.service_enabled.get(spec.key, True))
             enable.SetName(f"Enable {spec.label}")
             box.Add(enable, 0, wx.ALL, 6)
             self.svc_enable[spec.key] = enable
-            if spec.has_token:
-                token = wx.TextCtrl(
-                    box.GetStaticBox(),
-                    value=self._state.service_token.get(spec.key, ""),
-                )
-                _add_labeled(box.GetStaticBox(), box, f"{spec.label} token:", token, spec.token_help)
-                self.svc_token[spec.key] = token
-                token.Enable(enable.GetValue())
+
+            values = self._state.service_config.get(spec.key, {})
+            controls: Dict[str, wx.Window] = {}
+            for fld in spec.fields:
+                ctrl = self._make_service_control(parent, box, fld, values.get(fld.key, fld.default))
+                ctrl.Enable(enable.GetValue())
+                controls[fld.key] = ctrl
+            self.svc_fields[spec.key] = controls
+            if controls:
+                # Enable/disable a service's fields together with its checkbox.
                 enable.Bind(
                     wx.EVT_CHECKBOX,
-                    lambda e, t=token: t.Enable(e.IsChecked()),
+                    lambda e, cs=list(controls.values()): [c.Enable(e.IsChecked()) for c in cs],
                 )
             sizer.Add(box, 0, wx.EXPAND | wx.ALL, 6)
 
@@ -421,8 +436,15 @@ class WizardFrame(wx.Frame):
             state.input_device_index = self.in_spin.GetValue()
         for spec in SERVICES:
             state.service_enabled[spec.key] = self.svc_enable[spec.key].GetValue()
-            if spec.has_token:
-                state.service_token[spec.key] = self.svc_token[spec.key].GetValue()
+            values = state.service_config.setdefault(spec.key, {})
+            for fld in spec.fields:
+                ctrl = self.svc_fields[spec.key][fld.key]
+                if fld.kind == "list":
+                    values[fld.key] = wizard.parse_admins(ctrl.GetValue())
+                elif fld.kind == "args":
+                    values[fld.key] = wizard.parse_args(ctrl.GetValue())
+                else:
+                    values[fld.key] = ctrl.GetValue()
         state.default_service = self._service_keys[self.default_choice.GetSelection()]
         return state
 

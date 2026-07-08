@@ -24,12 +24,19 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from bot import app_vars
-from bot.config.models import ConfigModel, TeamTalkModel
+from bot.config.models import (
+    ConfigModel,
+    TeamTalkModel,
+    VkModel,
+    YamModel,
+    YtModel,
+)
 
 # Default output path, matching Cider.py's ``--config`` default.
 DEFAULT_CONFIG_PATH = os.path.join(app_vars.directory, "config.json")
@@ -83,16 +90,33 @@ SERVER_FIELDS: List[Field] = [
 class ServiceSpec:
     key: str
     label: str
-    has_token: bool
-    token_help: str = ""
+    fields: List[Field] = field(default_factory=list)
 
+
+_VK_DEFAULTS = VkModel()
+_YAM_DEFAULTS = YamModel()
+_YT_DEFAULTS = YtModel()
 
 SERVICES: List[ServiceSpec] = [
-    ServiceSpec("vk", "VK (VKontakte)", True,
-                "Paste your VK API token. Leave blank to configure it later."),
-    ServiceSpec("yam", "Yandex Music", True,
-                "Paste your Yandex Music token. Leave blank to configure it later."),
-    ServiceSpec("yt", "YouTube", False),
+    ServiceSpec("vk", "VK (VKontakte)", [
+        Field("token", "VK API token", "secret", _VK_DEFAULTS.token,
+              "Paste your VK API token. Leave blank to configure it later."),
+    ]),
+    ServiceSpec("yam", "Yandex Music", [
+        Field("token", "Yandex Music token", "secret", _YAM_DEFAULTS.token,
+              "Paste your Yandex Music token. Leave blank to configure it later."),
+    ]),
+    ServiceSpec("yt", "YouTube", [
+        Field("yt_dlp_path", "Path to the yt-dlp program", "text", _YT_DEFAULTS.yt_dlp_path,
+              'Path to the yt-dlp binary, e.g. "/home/user/cider/yt-dlp", or just '
+              '"yt-dlp" if it is on the system PATH.'),
+        Field("cookiefile_path", "Path to a cookies.txt file", "text", _YT_DEFAULTS.cookiefile_path,
+              "Optional. A YouTube cookies file helps with age or bot gated videos. "
+              "Leave blank for none."),
+        Field("extra_args", "Extra yt-dlp arguments", "args", list(_YT_DEFAULTS.extra_args),
+              "Advanced, optional. Extra command-line arguments passed to yt-dlp, "
+              "e.g.  --js-runtimes deno:/home/user/.deno/bin/deno"),
+    ]),
 ]
 
 
@@ -199,8 +223,10 @@ class WizardState:
     service_enabled: Dict[str, bool] = field(
         default_factory=lambda: {s.key: True for s in SERVICES}
     )
-    service_token: Dict[str, str] = field(
-        default_factory=lambda: {s.key: "" for s in SERVICES if s.has_token}
+    service_config: Dict[str, Dict[str, Any]] = field(
+        default_factory=lambda: {
+            s.key: {f.key: f.default for f in s.fields} for s in SERVICES
+        }
     )
     default_service: str = "vk"
     # When editing an existing file, keep every field the wizard does not touch.
@@ -219,9 +245,12 @@ class WizardState:
                 "yam": config.services.yam.enabled,
                 "yt": config.services.yt.enabled,
             },
-            service_token={
-                "vk": config.services.vk.token,
-                "yam": config.services.yam.token,
+            service_config={
+                spec.key: {
+                    fld.key: getattr(getattr(config.services, spec.key), fld.key)
+                    for fld in spec.fields
+                }
+                for spec in SERVICES
             },
             default_service=config.services.default_service,
             base_config=config,
@@ -288,11 +317,13 @@ def build_config(state: WizardState) -> ConfigModel:
 
     services = data["services"]
     services["default_service"] = state.default_service
-    services["vk"]["enabled"] = state.service_enabled.get("vk", True)
-    services["vk"]["token"] = state.service_token.get("vk", "")
-    services["yam"]["enabled"] = state.service_enabled.get("yam", True)
-    services["yam"]["token"] = state.service_token.get("yam", "")
-    services["yt"]["enabled"] = state.service_enabled.get("yt", True)
+    for spec in SERVICES:
+        service = services[spec.key]
+        service["enabled"] = state.service_enabled.get(spec.key, True)
+        values = state.service_config.get(spec.key, {})
+        for fld in spec.fields:
+            if fld.key in values:
+                service[fld.key] = values[fld.key]
 
     return ConfigModel(**data)
 
@@ -318,3 +349,13 @@ def load_config(path: str) -> ConfigModel:
 def parse_admins(raw: str) -> List[str]:
     """Parse a comma separated admin list from a text field."""
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def parse_args(raw: str) -> List[str]:
+    """Parse extra command-line arguments (shell-like, space separated)."""
+    return shlex.split(raw)
+
+
+def format_args(args: List[str]) -> str:
+    """Inverse of :func:`parse_args`, for displaying a list of args in a field."""
+    return shlex.join(args)
