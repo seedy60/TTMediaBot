@@ -42,12 +42,22 @@ class YtService(_Service):
         self._base_args = [
             self.config.yt_dlp_path,
             "--ignore-config",
-            "--no-warnings",
             "--socket-timeout",
             "5",
         ]
         if self.config.cookiefile_path and os.path.isfile(self.config.cookiefile_path):
             self._base_args += ["--cookies", self.config.cookiefile_path]
+
+    @staticmethod
+    def _summarize_error(stderr: str) -> str:
+        # Pick yt-dlp's own ERROR line (falling back to the last line) so the
+        # message shown to the user is concise but still tells them what happened.
+        lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+        error_lines = [line for line in lines if line.startswith("ERROR")]
+        summary = (error_lines or lines or ["yt-dlp failed"])[-1]
+        if summary.startswith("ERROR:"):
+            summary = summary[len("ERROR:") :].strip()
+        return summary[:300]
 
     def _run_json(self, args: List[str]) -> Dict[str, Any]:
         process = subprocess.run(
@@ -56,17 +66,18 @@ class YtService(_Service):
             stderr=subprocess.PIPE,
             creationflags=_CREATIONFLAGS,
         )
+        stderr = process.stderr.decode(errors="replace").strip()
         if process.returncode != 0:
-            logging.error(
-                "yt-dlp failed (%s): %s",
-                process.returncode,
-                process.stderr.decode(errors="replace").strip(),
-            )
-            raise errors.ServiceError()
+            logging.error("yt-dlp failed (%s): %s", process.returncode, stderr)
+            raise errors.ServiceError(self._summarize_error(stderr))
+        # yt-dlp still ran, but surface warnings (e.g. a cookie file that could
+        # not be loaded) that would otherwise be invisible.
+        if stderr:
+            logging.warning("yt-dlp: %s", stderr)
         try:
             return json.loads(process.stdout)
         except json.JSONDecodeError:
-            raise errors.ServiceError()
+            raise errors.ServiceError("yt-dlp returned no data")
 
     def download(self, track: Track, file_path: str) -> None:
         webpage_url = (track.extra_info or {}).get("webpage_url")
@@ -84,12 +95,9 @@ class YtService(_Service):
                 creationflags=_CREATIONFLAGS,
             )
         if process.returncode != 0:
-            logging.error(
-                "yt-dlp download failed (%s): %s",
-                process.returncode,
-                process.stderr.decode(errors="replace").strip(),
-            )
-            raise errors.ServiceError()
+            stderr = process.stderr.decode(errors="replace").strip()
+            logging.error("yt-dlp download failed (%s): %s", process.returncode, stderr)
+            raise errors.ServiceError(self._summarize_error(stderr))
 
     def get(
         self,

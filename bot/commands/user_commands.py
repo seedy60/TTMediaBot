@@ -58,10 +58,11 @@ class PlayPauseCommand(Command):
                 )
             except errors.NothingFoundError:
                 return self.translator.translate("Nothing is found for your query")
-            except errors.ServiceError:
-                return self.translator.translate(
+            except errors.ServiceError as e:
+                message = self.translator.translate(
                     "The selected service is currently unavailable"
                 )
+                return "{}: {}".format(message, e) if str(e) else message
         else:
             if self.player.state == State.Playing:
                 self.run_async(self.player.pause)
@@ -89,8 +90,9 @@ class PlayUrlCommand(Command):
                 self.run_async(self.player.play, tracks)
             except errors.IncorrectProtocolError:
                 return self.translator.translate("Incorrect protocol")
-            except errors.ServiceError:
-                return self.translator.translate("Cannot process stream URL")
+            except errors.ServiceError as e:
+                message = self.translator.translate("Cannot process stream URL")
+                return "{}: {}".format(message, e) if str(e) else message
             except errors.PathNotFoundError:
                 return self.translator.translate("The path cannot be found")
         else:
